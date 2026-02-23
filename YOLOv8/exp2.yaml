@@ -1,0 +1,11 @@
+path: .
+train:
+  - Experiment2/train_70/train/images
+
+val:
+  - Experiment2/train_70/val/images
+
+test: Experiment2/test_30/images
+
+names:
+  0: queen
