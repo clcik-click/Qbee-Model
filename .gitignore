@@ -1,0 +1,17 @@
+# data
+/data/
+
+# virtual env
+/env/
+.venv/
+
+# training outputs
+/runs/
+
+# model weights
+*.pt
+*.onnx
+
+# experiment folders
+/YOLOv8/Experiment1/
+/YOLOv8/Experiment2/

@@ -16,8 +16,8 @@ Matching:
 1) exact key match
 2) prefix key match (dataset_key.startswith(list_key))
 
-Outputs:
-Selected<N>/
+Outputs (by default):
+data/data-with-labels/Selected<N>/
   images/
   labels/ (optional)
   selected.csv
@@ -120,11 +120,22 @@ def find_all_matches(prekeyed: List[Tuple[Item, str]], wanted_key: str) -> List[
 
 
 def clear_output(out_dir: Path) -> None:
+    # Safety: only delete folders that start with "Selected"
     assert out_dir.name.lower().startswith("selected"), "Refusing to delete unexpected folder"
     if out_dir.exists():
         shutil.rmtree(out_dir)
     (out_dir / "images").mkdir(parents=True, exist_ok=True)
     (out_dir / "labels").mkdir(parents=True, exist_ok=True)
+
+
+def clear_previous_selected(out_parent: Path, out_base: str) -> None:
+    """
+    Delete previous outputs like Selected67, Selected120, etc. inside out_parent.
+    """
+    base = out_base.lower()
+    for p in out_parent.iterdir():
+        if p.is_dir() and p.name.lower().startswith(base):
+            shutil.rmtree(p)
 
 
 def copy_selected(sel: List[Item], out_dir: Path, copy_labels: bool) -> None:
@@ -158,9 +169,18 @@ def write_selected_csv(sel: List[Item], out_dir: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
-    ap.add_argument("--yolo_dir", default="Honey Bee Detection Model.v1i.yolov8")
+    ap.add_argument(
+        "--yolo_dir",
+        default="data/data-with-labels/Honey Bee Detection Model.v1i.yolov8",
+        help="Path (relative to --root) to YOLO dataset folder containing train/valid/test.",
+    )
     ap.add_argument("--splits", default="train,valid,test")
     ap.add_argument("--list_txt", default="selected_pictures.txt")
+    ap.add_argument(
+        "--out_parent",
+        default="data/data-with-labels",
+        help="Parent folder where Selected<N>/ will be created.",
+    )
     ap.add_argument("--out_base", default="Selected")
     ap.add_argument("--copy_labels", action="store_true")
     args = ap.parse_args()
@@ -173,6 +193,9 @@ def main() -> None:
     items = build_index(yolo, splits)
     if not items:
         print("No images found under the provided YOLO directory.")
+        print(f"Checked: {yolo}")
+        print(f"Splits:   {splits}")
+        print("Expected: <split>/images/*.jpg (and optional <split>/labels/*.txt)")
         return
 
     prekeyed = precompute_keys(items)
@@ -194,7 +217,13 @@ def main() -> None:
             chosen.append(m)  # copy ALL duplicates
         all_matches_lines.append("")
 
-    out_dir = root / f"{args.out_base}{len(chosen)}"
+    out_parent = (root / args.out_parent).resolve()
+    out_parent.mkdir(parents=True, exist_ok=True)
+
+    # delete old Selected* outputs in out_parent so the new run replaces them
+    clear_previous_selected(out_parent, args.out_base)
+
+    out_dir = out_parent / f"{args.out_base}{len(chosen)}"
     clear_output(out_dir)
     copy_selected(chosen, out_dir, copy_labels=args.copy_labels)
     write_selected_csv(chosen, out_dir)
