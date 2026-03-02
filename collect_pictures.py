@@ -16,6 +16,13 @@ Matching:
 1) exact key match
 2) prefix key match (dataset_key.startswith(list_key))
 
+Queen-only label option:
+- If --queen_only is set AND --copy_labels is set:
+  - Keep ONLY queen boxes (class == --queen_id_src)
+  - Remap class id to --queen_id_new (default 0)
+  - If no queen boxes -> write empty label file (negative example)
+  - If label file missing -> write empty label file
+
 Outputs (by default):
 data/data-with-labels/Selected<N>/
   images/
@@ -24,6 +31,8 @@ data/data-with-labels/Selected<N>/
   all_matches.txt
   missing.txt
 """
+
+# python collect_pictures.py --copy_labels --queen_only --queen_id_src 3 --queen_id_new 0
 
 from __future__ import annotations
 
@@ -55,9 +64,9 @@ def normalize_full_filename(name: str) -> str:
     - keep letters+numbers only
 
     Examples:
-      "Bee SG 5.jpg"     -> "beesg5jpg"
-      "bees.jpg"         -> "beesjpg"
-      "Bee-SG-5_jpg.rf.x.jpg" -> "beesg5jpgrfxjpg"
+      "Bee SG 5.jpg"              -> "beesg5jpg"
+      "bees.jpg"                  -> "beesjpg"
+      "Bee-SG-5_jpg.rf.x.jpg"     -> "beesg5jpgrfxjpg"
     """
     base = Path(name).name.lower()  # full filename, not stem
     return re.sub(r"[^a-z0-9]+", "", base)
@@ -119,9 +128,43 @@ def find_all_matches(prekeyed: List[Tuple[Item, str]], wanted_key: str) -> List[
     return [it for (it, k) in prekeyed if k.startswith(wanted_key)]
 
 
-def clear_output(out_dir: Path) -> None:
-    # Safety: only delete folders that start with "Selected"
-    assert out_dir.name.lower().startswith("selected"), "Refusing to delete unexpected folder"
+def filter_to_queen(label_path: Path, queen_id_src: int, queen_id_new: int) -> str:
+    """
+    Keep ONLY queen boxes (class == queen_id_src) and remap to queen_id_new.
+    If no queen boxes (or missing/empty label file), return "" (empty) -> negative example.
+    """
+    if not label_path.exists():
+        return ""
+
+    txt = label_path.read_text(encoding="utf-8", errors="ignore").strip()
+    if not txt:
+        return ""
+
+    lines_out: List[str] = []
+    for line in txt.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = re.split(r"\s+", line)
+        if not parts:
+            continue
+
+        # Robust if class written like "3.0"
+        try:
+            cls = int(float(parts[0]))
+        except Exception:
+            continue
+
+        if cls == queen_id_src:
+            parts[0] = str(queen_id_new)
+            lines_out.append(" ".join(parts))
+
+    return "\n".join(lines_out) + ("\n" if lines_out else "")
+
+
+def clear_output(out_dir: Path, out_base: str) -> None:
+    # Safety: only delete folders that start with out_base (default: "Selected")
+    assert out_dir.name.lower().startswith(out_base.lower()), "Refusing to delete unexpected folder"
     if out_dir.exists():
         shutil.rmtree(out_dir)
     (out_dir / "images").mkdir(parents=True, exist_ok=True)
@@ -138,10 +181,21 @@ def clear_previous_selected(out_parent: Path, out_base: str) -> None:
             shutil.rmtree(p)
 
 
-def copy_selected(sel: List[Item], out_dir: Path, copy_labels: bool) -> None:
+def copy_selected(
+    sel: List[Item],
+    out_dir: Path,
+    copy_labels: bool,
+    queen_only: bool,
+    queen_id_src: int,
+    queen_id_new: int,
+) -> None:
     """
     Copy all selected items.
     Prevent copying the exact same file path twice (if your list repeats lines).
+
+    If copy_labels is True:
+      - If queen_only is True: write filtered labels (queen-only, remapped)
+      - Else: copy label if exists, otherwise write empty label file
     """
     oi, ol = out_dir / "images", out_dir / "labels"
     copied_paths: Set[str] = set()
@@ -152,9 +206,22 @@ def copy_selected(sel: List[Item], out_dir: Path, copy_labels: bool) -> None:
             continue
         copied_paths.add(key)
 
+        # Always copy image
         shutil.copy2(it.img, oi / it.img.name)
-        if copy_labels and it.lbl.exists():
-            shutil.copy2(it.lbl, ol / it.lbl.name)
+
+        if not copy_labels:
+            continue
+
+        out_lbl = ol / (it.img.stem + ".txt")
+
+        if queen_only:
+            new_txt = filter_to_queen(it.lbl, queen_id_src, queen_id_new)
+            out_lbl.write_text(new_txt, encoding="utf-8")
+        else:
+            if it.lbl.exists():
+                shutil.copy2(it.lbl, out_lbl)
+            else:
+                out_lbl.write_text("", encoding="utf-8")
 
 
 def write_selected_csv(sel: List[Item], out_dir: Path) -> None:
@@ -183,6 +250,16 @@ def main() -> None:
     )
     ap.add_argument("--out_base", default="Selected")
     ap.add_argument("--copy_labels", action="store_true")
+
+    # Queen-only label filtering/remap
+    ap.add_argument(
+        "--queen_only",
+        action="store_true",
+        help="If set (and --copy_labels), keep ONLY queen boxes and remap to --queen_id_new.",
+    )
+    ap.add_argument("--queen_id_src", type=int, default=3, help="Queen class index in source labels.")
+    ap.add_argument("--queen_id_new", type=int, default=0, help="New class id for queen in output labels.")
+
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -224,8 +301,16 @@ def main() -> None:
     clear_previous_selected(out_parent, args.out_base)
 
     out_dir = out_parent / f"{args.out_base}{len(chosen)}"
-    clear_output(out_dir)
-    copy_selected(chosen, out_dir, copy_labels=args.copy_labels)
+    clear_output(out_dir, out_base=args.out_base)
+
+    copy_selected(
+        chosen,
+        out_dir,
+        copy_labels=args.copy_labels,
+        queen_only=args.queen_only,
+        queen_id_src=args.queen_id_src,
+        queen_id_new=args.queen_id_new,
+    )
     write_selected_csv(chosen, out_dir)
 
     (out_dir / "all_matches.txt").write_text("\n".join(all_matches_lines), encoding="utf-8")
@@ -235,6 +320,12 @@ def main() -> None:
     print(f"Matched:   {len(chosen)}  (all duplicates included)")
     print(f"Missing:   {len(missing_lines)}")
     print(f"Output:    {out_dir}")
+
+    if args.copy_labels and args.queen_only:
+        print(f"Queen-only labels: src={args.queen_id_src} -> new={args.queen_id_new} (empty = negative)")
+
+    elif args.copy_labels:
+        print("Labels copied as-is (missing labels written as empty .txt).")
 
 
 if __name__ == "__main__":
