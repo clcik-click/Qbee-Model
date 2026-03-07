@@ -1,0 +1,6 @@
+path: .
+train: Experiment3/train/images
+val: Experiment3/val/images
+
+names:
+  0: queen
