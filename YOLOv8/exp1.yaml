@@ -1,7 +1,7 @@
 path: .
 train: Experiment1/train/images
 val: Experiment1/val/images
-test: Experiment2/test_30/images
+test: Experiment2/test/images
 
 names:
   0: queen
