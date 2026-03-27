@@ -1,3 +1,5 @@
 yolo export model=best.pt format=coreml imgsz=640 nms=True
 
 yolo export model=best.pt format=coreml imgsz=960 nms=True
+
+yolo export model=best.pt format=coreml imgsz=896 nms=True
